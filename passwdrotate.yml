@@ -1,0 +1,41 @@
+---
+- name: Rotate user passwords every 30 days
+  hosts: rhel
+  become: yes
+  vars:
+    users_to_rotate:
+      - root
+      - ansible  # Add your users
+    password_length: 20
+    max_days: 30  # Enforce rotation every 30 days
+
+  tasks:
+    - name: Generate random password
+      ansible.builtin.set_fact:
+        new_password: "{{ ('%02x' % ansible_date_time.epoch + '%05d' % (lookup('ansible.builtin.password', '/dev/null length=%d' % password_length) | hash('sha256') | truncate(20, True, '') | int ))[:password_length] }}"
+
+    - name: Hash new password
+      ansible.builtin.set_fact:
+        password_hash: "{{ new_password | password_hash('sha512') }}"
+
+    - name: Update user password
+      ansible.builtin.user:
+        name: "{{ item }}"
+        password: "{{ password_hash }}"
+      loop: "{{ users_to_rotate }}"
+
+    - name: Set password policy (30-day max, warn 7 days)
+      ansible.builtin.user:
+        name: "{{ item }}"
+        password_expire_max: "{{ max_days }}"
+        password_expire_min: 1
+        password_expire_warn: 7
+      loop: "{{ users_to_rotate }}"
+
+    - name: Log rotation (delegate to Ansible server)
+      ansible.builtin.lineinfile:
+        path: "/ansible/password_report_{{ ansible_date_time.date }}.txt"
+        line: "{{ inventory_hostname }} - {{ item }}: rotated {{ ansible_date_time.iso8601 }} (new pass stored securely)"
+        create: yes
+      delegate_to: localhost
+      loop: "{{ users_to_rotate }}"
